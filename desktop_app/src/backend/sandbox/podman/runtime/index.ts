@@ -104,11 +104,6 @@ export type PodmanMachineInspectOutput = {
 export default class PodmanRuntime {
   private ARCHESTRA_MACHINE_NAME = 'archestra-ai-machine';
   private LINUX_SOCKET_PATH = this.getLinuxSocketPath();
-
-  private getLinuxSocketPath(): string {
-    const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`;
-    return path.join(runtimeDir, 'podman', 'archestra-podman.sock');
-  }
   private isLinux = process.platform === 'linux';
   private podmanServiceProcess: ChildProcess | null = null;
 
@@ -120,7 +115,7 @@ export default class PodmanRuntime {
   private onMachineInstallationError: (error: Error) => void = () => {};
 
   private registryAuthFilePath: string;
-  private binaryPath = this.isLinux ? 'podman' : getBinaryExecPath('podman-remote-static-v5.5.2');
+  private binaryPath = getBinaryExecPath('podman-remote-static-v5.5.2');
 
   private baseImage: PodmanImage;
 
@@ -377,94 +372,91 @@ export default class PodmanRuntime {
   }
 
   /**
-   * Starts the Podman system service on Linux.
-   * This creates a socket that can be used to communicate with Podman.
+   * Starts the Podman system service on Linux using systemctl.
+   * This enables the user-level Podman API socket that can be accessed via the bundled remote client.
+   *
+   * Note: This requires Podman to be installed on the system for the service component,
+   * but uses the bundled remote client for API communication.
    */
   private async startPodmanSystemService() {
-    // Ensure the socket directory exists
-    const socketDir = path.dirname(this.LINUX_SOCKET_PATH);
-    if (!fs.existsSync(socketDir)) {
-      try {
-        fs.mkdirSync(socketDir, { recursive: true });
-        log.info(`Created socket directory: ${socketDir}`);
-      } catch (error) {
-        log.error(`Failed to create socket directory: ${error}`);
-        throw error;
-      }
-    }
-
-    // Clean up any existing socket
-    if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
-      try {
-        fs.unlinkSync(this.LINUX_SOCKET_PATH);
-      } catch (error) {
-        log.warn(`Failed to remove existing socket: ${error}`);
-      }
-    }
-
     return new Promise<void>((resolve, reject) => {
-      const socketUri = `unix://${this.LINUX_SOCKET_PATH}`;
-      log.info(`Starting Podman system service at ${socketUri}`);
+      log.info('Checking for Podman system installation...');
+      this.machineStartupMessage = 'Checking Podman installation...';
+      this.machineStartupPercentage = 10;
 
-      this.podmanServiceProcess = spawn(this.binaryPath, ['system', 'service', '--time=0', socketUri], {
+      // First check if Podman is available on the system
+      const checkPodmanProcess = spawn('which', ['podman'], {
         stdio: ['ignore', 'pipe', 'pipe'],
-        detached: false,
       });
 
-      let hasStarted = false;
-      let errorOutput = '';
+      checkPodmanProcess.on('exit', (code) => {
+        if (code !== 0) {
+          const errorMessage =
+            'Podman is not installed on this system. On Linux, Archestra requires Podman to be installed for container-based MCP servers. Please install Podman using your package manager (e.g., apt install podman, dnf install podman, or pacman -S podman).';
+          this.machineStartupError = errorMessage;
+          log.error(errorMessage);
+          reject(new Error(errorMessage));
+          return;
+        }
 
-      const checkSocket = (retryCount = 0) => {
-        if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
-          hasStarted = true;
-          this.machineStartupPercentage = 100;
-          this.machineStartupMessage = 'Podman service started successfully';
-          log.info('Podman system service started successfully');
-          resolve();
-        } else if (retryCount < 100) { // Max 10 seconds (100 * 100ms)
-          setTimeout(() => checkSocket(retryCount + 1), 100);
-        } else {
+        // Podman is available, start the user service
+        log.info('Podman found on system, starting user service with systemctl...');
+        this.machineStartupMessage = 'Starting Podman user service...';
+        this.machineStartupPercentage = 25;
+
+        const systemctlProcess = spawn('systemctl', ['--user', 'start', 'podman.socket'], {
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let hasStarted = false;
+        let errorOutput = '';
+
+        systemctlProcess.stdout?.on('data', (data) => {
+          const output = data.toString();
+          log.info(`[systemctl stdout]: ${output}`);
+        });
+
+        systemctlProcess.stderr?.on('data', (data) => {
+          errorOutput += data.toString();
+          log.info(`[systemctl stderr]: ${data}`);
+        });
+
+        systemctlProcess.on('error', (error) => {
           if (!hasStarted) {
-            const errorMessage = 'Timeout waiting for Podman socket creation';
+            const errorMessage = `Failed to start systemctl: ${error.message}. Please ensure systemd user services are available.`;
             this.machineStartupError = errorMessage;
             reject(new Error(errorMessage));
           }
-        }
-      };
+        });
 
-      this.podmanServiceProcess.stdout?.on('data', (data) => {
-        const output = data.toString();
-        log.info(`[Podman service stdout]: ${output}`);
-        if (output.includes('API service listening')) {
-          this.machineStartupPercentage = 50;
-          this.machineStartupMessage = 'Podman API service starting...';
-          // Start checking for socket
-          setTimeout(() => checkSocket(0), 100);
-        }
+        systemctlProcess.on('exit', (code, signal) => {
+          if (code === 0) {
+            hasStarted = true;
+            this.machineStartupPercentage = 75;
+            this.machineStartupMessage = 'Podman service started, verifying socket...';
+            log.info('Podman socket started successfully');
+
+            // Wait a moment for the socket to be ready
+            setTimeout(() => {
+              this.machineStartupPercentage = 100;
+              this.machineStartupMessage = 'Podman service ready';
+              resolve();
+            }, 1000);
+          } else {
+            if (!hasStarted) {
+              const errorMessage = `systemctl start podman.socket failed with code ${code}, signal ${signal}. Output: ${errorOutput}. Please ensure Podman is properly installed and the user service is available. You may need to run 'systemctl --user enable podman.socket' first.`;
+              this.machineStartupError = errorMessage;
+              reject(new Error(errorMessage));
+            }
+          }
+        });
       });
 
-      this.podmanServiceProcess.stderr?.on('data', (data) => {
-        errorOutput += data.toString();
-        log.error(`[Podman service stderr]: ${data}`);
+      checkPodmanProcess.on('error', (error) => {
+        const errorMessage = `Failed to check for Podman installation: ${error.message}`;
+        this.machineStartupError = errorMessage;
+        reject(new Error(errorMessage));
       });
-
-      this.podmanServiceProcess.on('error', (error) => {
-        if (!hasStarted) {
-          this.machineStartupError = error.message;
-          reject(error);
-        }
-      });
-
-      this.podmanServiceProcess.on('exit', (code, signal) => {
-        if (!hasStarted) {
-          const errorMessage = `Podman service exited unexpectedly with code ${code}, signal ${signal}. Error: ${errorOutput}`;
-          this.machineStartupError = errorMessage;
-          reject(new Error(errorMessage));
-        }
-      });
-
-      // Start checking for socket file after a brief delay
-      setTimeout(() => checkSocket(0), 500);
     });
   }
 
@@ -495,7 +487,6 @@ export default class PodmanRuntime {
       return;
     }
 
-    // Original code for macOS/Windows
     this.runCommand<PodmanMachineListOutput>({
       command: ['machine', 'ls', '--format', 'json'],
       pipes: {
@@ -574,7 +565,6 @@ export default class PodmanRuntime {
       return;
     }
 
-    // Original code for macOS/Windows
     this.runCommand({
       command: ['machine', 'stop', this.ARCHESTRA_MACHINE_NAME],
       pipes: {
@@ -603,7 +593,6 @@ export default class PodmanRuntime {
       return Promise.resolve();
     }
 
-    // Original code for macOS/Windows
     return new Promise((resolve, reject) => {
       const command = ['machine', 'rm'];
 
@@ -664,7 +653,6 @@ export default class PodmanRuntime {
       return this.LINUX_SOCKET_PATH;
     }
 
-    // Original code for macOS/Windows
     return new Promise((resolve, reject) => {
       let output = '';
       this.runCommand({
@@ -732,5 +720,11 @@ export default class PodmanRuntime {
       pullMessage: this.baseImage.statusSummary.pullMessage,
       pullError: this.baseImage.statusSummary.pullError,
     };
+  }
+
+  private getLinuxSocketPath(): string {
+    // Use the standard systemd socket path for Podman
+    const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`;
+    return path.join(runtimeDir, 'podman', 'podman.sock');
   }
 }
