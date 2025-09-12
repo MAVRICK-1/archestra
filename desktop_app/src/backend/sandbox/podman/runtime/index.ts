@@ -1,4 +1,4 @@
-import { spawn, ChildProcess } from 'node:child_process';
+import { ChildProcess, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -461,7 +461,7 @@ export default class PodmanRuntime {
     if (this.isLinux) {
       this.machineStartupPercentage = 10;
       this.machineStartupMessage = 'Starting Podman service on Linux...';
-      
+
       this.startPodmanSystemService()
         .then(() => {
           this.onMachineInstallationSuccess();
@@ -522,7 +522,7 @@ export default class PodmanRuntime {
       log.info('Stopping Podman system service...');
       this.podmanServiceProcess.kill('SIGTERM');
       this.podmanServiceProcess = null;
-      
+
       // Clean up socket file
       if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
         try {
@@ -532,7 +532,7 @@ export default class PodmanRuntime {
           log.warn(`Failed to remove socket file: ${error}`);
         }
       }
-      
+
       this.machineStartupPercentage = 0;
       this.machineStartupMessage = 'Podman service stopped';
       this.machineStartupError = null;
