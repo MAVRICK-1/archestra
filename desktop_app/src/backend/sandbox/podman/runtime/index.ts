@@ -10,6 +10,9 @@ import { PODMAN_REGISTRY_AUTH_FILE_PATH } from '@backend/utils/paths';
 
 import { parsePodmanMachineInstallationProgress } from './utils';
 
+const IS_LINUX = process.platform === 'linux';
+const BINARIES_DIRECTORY = getBinariesDirectory();
+
 export const PodmanRuntimeStatusSummarySchema = z.object({
   /**
    * startupPercentage is a number between 0 and 100 that represents the percentage of the startup process that has been completed.
@@ -104,7 +107,7 @@ export type PodmanMachineInspectOutput = {
 export default class PodmanRuntime {
   private ARCHESTRA_MACHINE_NAME = 'archestra-ai-machine';
   private LINUX_SOCKET_PATH = this.getLinuxSocketPath();
-  private isLinux = process.platform === 'linux';
+
   private podmanServiceProcess: ChildProcess | null = null;
 
   private machineStartupPercentage = 0;
@@ -115,35 +118,33 @@ export default class PodmanRuntime {
   private onMachineInstallationError: (error: Error) => void = () => {};
 
   private registryAuthFilePath: string;
-  private binaryPath = this.isLinux
-    ? getBinaryExecPath('podman-static-v5.6.1')
+  private binaryPath = IS_LINUX
+    ? path.join(BINARIES_DIRECTORY, 'podman', 'usr', 'local', 'bin', 'podman')
     : getBinaryExecPath('podman-remote-static-v5.5.2');
-  private remoteBinaryPath = getBinaryExecPath('podman-remote-static-v5.5.2');
 
   private baseImage: PodmanImage;
 
   /**
-   * NOTE: see here as to why we need to bundle, and configure, `gvproxy` + `vfkit`, alongside `podman`:
+   * NOTE: see here as to why we need to bundle, and configure, various helper binaries, alongside `podman`:
    * https://podman-desktop.io/docs/troubleshooting/troubleshooting-podman-on-macos#unable-to-set-custom-binary-path-for-podman-on-macos
    * https://github.com/containers/podman/issues/11960#issuecomment-953672023
    *
    * Basically, when you install podman via the "pkginstaller" (https://github.com/containers/podman/blob/v5.5.2/contrib/pkginstaller/README.md?plain=1#L14)
-   * it comes with `gvproxy` and `vfkit` binaries "baked in". We need to do a bit more configuration here to
+   * it comes with various helper binaries "baked in". We need to do a bit more configuration here to
    * tell the podman binary where to find these "helper" binaries.
-   *
-   * NOTE: `gvproxy` and `vfkit` MUST be named explicitly `gvproxy` and `vfkit` respectively.
    *
    * It cannot have the version appended to it, this is because `podman` internally is looking specifically for that
    * binary naming convention. As of this writing, the versions we are using are:
-   * - `gvproxy` is [`v0.8.6`](https://github.com/containers/gvisor-tap-vsock/releases/tag/v0.8.6) -- podman v5.5.2 comes with this version (see https://github.com/containers/podman/blob/v5.5.2/go.mod#L18)
-   * - `vfkit` is [`v0.6.0`](https://github.com/crc-org/vfkit/releases/tag/v0.6.0) -- podman v5.5.2 comes with this version (see https://github.com/containers/podman/blob/v5.5.2/go.mod#L26)
-   *   - NOTE: in the releases of `vfkit` they have `vfkit` + `vfkit-unsigned` (we are using `vfkit`.. honestly not sure of the difference?)
    *
    * See also `CONTAINERS_HELPER_BINARY_DIR` env var which is being passed into our podman commands below.
    */
-  private helperBinariesDirectory = getBinariesDirectory();
+  private helperBinariesDirectory = IS_LINUX ? path.join(BINARIES_DIRECTORY, 'podman') : getBinariesDirectory();
 
   constructor(onMachineInstallationSuccess: () => void, onMachineInstallationError: (error: Error) => void) {
+    log.info(
+      `[PodmanRuntime] constructor: is_linux=${IS_LINUX}, binaries_directory=${BINARIES_DIRECTORY}, podman_binary_path=${this.binaryPath}, helper_binaries_directory=${this.helperBinariesDirectory}`
+    );
+
     this.baseImage = new PodmanImage();
 
     this.onMachineInstallationSuccess = onMachineInstallationSuccess;
@@ -170,22 +171,19 @@ export default class PodmanRuntime {
     command,
     pipes: { onStdout, onStderr, onExit, onError },
   }: RunCommandOptions<T>): void {
-    // Use remote client for API operations on all platforms for consistency
-    const clientBinary = this.remoteBinaryPath;
-    const commandForLogs = `${clientBinary} ${command.join(' ')}`;
+    const commandForLogs = `${this.binaryPath} ${command.join(' ')}`;
 
     log.info(`[Podman command]: running ${commandForLogs}`);
 
-    const commandProcess = spawn(clientBinary, command, {
+    const commandProcess = spawn(this.binaryPath, command, {
       env: {
         ...process.env,
         /**
          * See here, `CONTAINERS_HELPER_BINARY_DIR` isn't well documented, but here is what I've found:
          * https://github.com/containers/podman/blob/0c4c9e4fbc0cf9cdcdcb5ea1683a2ffeddb03e77/hack/bats#L131
          * https://docs.podman.io/en/stable/markdown/podman.1.html#environment-variables
-         * Note: Only needed for macOS/Windows where we use bundled binaries
          */
-        ...(this.isLinux ? {} : { CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory }),
+        CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
 
         /**
          * Basically we don't want the podman machine to use the user's docker config (if one exists)
@@ -490,7 +488,7 @@ export default class PodmanRuntime {
    */
   ensureArchestraMachineIsRunning() {
     // On Linux, use podman system service instead of podman machine
-    if (this.isLinux) {
+    if (IS_LINUX) {
       this.machineStartupPercentage = 10;
       this.machineStartupMessage = 'Starting Podman service on Linux...';
 
@@ -577,7 +575,7 @@ export default class PodmanRuntime {
    */
   stopArchestraMachine() {
     // On Linux, stop the system service instead
-    if (this.isLinux) {
+    if (IS_LINUX) {
       this.stopPodmanSystemService();
       return;
     }
@@ -605,7 +603,7 @@ export default class PodmanRuntime {
    */
   async removeArchestraMachine(force: boolean = true): Promise<void> {
     // On Linux, just stop the service
-    if (this.isLinux) {
+    if (IS_LINUX) {
       this.stopPodmanSystemService();
       return Promise.resolve();
     }
@@ -662,7 +660,7 @@ export default class PodmanRuntime {
    */
   async getSocketAddress(): Promise<string> {
     // On Linux, return the system service socket path
-    if (this.isLinux) {
+    if (IS_LINUX) {
       if (!fs.existsSync(this.LINUX_SOCKET_PATH)) {
         throw new Error(`Podman socket not found at ${this.LINUX_SOCKET_PATH}. Is the Podman service running?`);
       }
