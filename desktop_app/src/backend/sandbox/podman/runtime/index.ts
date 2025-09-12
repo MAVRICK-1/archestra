@@ -103,7 +103,12 @@ export type PodmanMachineInspectOutput = {
  */
 export default class PodmanRuntime {
   private ARCHESTRA_MACHINE_NAME = 'archestra-ai-machine';
-  private LINUX_SOCKET_PATH = `${process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() || '1000'}`}/podman/archestra-podman.sock`;
+  private LINUX_SOCKET_PATH = this.getLinuxSocketPath();
+
+  private getLinuxSocketPath(): string {
+    const runtimeDir = process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() ?? 1000}`;
+    return path.join(runtimeDir, 'podman', 'archestra-podman.sock');
+  }
   private isLinux = process.platform === 'linux';
   private podmanServiceProcess: ChildProcess | null = null;
 
@@ -409,15 +414,21 @@ export default class PodmanRuntime {
       let hasStarted = false;
       let errorOutput = '';
 
-      const checkSocket = () => {
+      const checkSocket = (retryCount = 0) => {
         if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
           hasStarted = true;
           this.machineStartupPercentage = 100;
           this.machineStartupMessage = 'Podman service started successfully';
           log.info('Podman system service started successfully');
           resolve();
+        } else if (retryCount < 100) { // Max 10 seconds (100 * 100ms)
+          setTimeout(() => checkSocket(retryCount + 1), 100);
         } else {
-          setTimeout(checkSocket, 100);
+          if (!hasStarted) {
+            const errorMessage = 'Timeout waiting for Podman socket creation';
+            this.machineStartupError = errorMessage;
+            reject(new Error(errorMessage));
+          }
         }
       };
 
@@ -428,7 +439,7 @@ export default class PodmanRuntime {
           this.machineStartupPercentage = 50;
           this.machineStartupMessage = 'Podman API service starting...';
           // Start checking for socket
-          setTimeout(checkSocket, 100);
+          setTimeout(() => checkSocket(0), 100);
         }
       });
 
@@ -453,7 +464,7 @@ export default class PodmanRuntime {
       });
 
       // Start checking for socket file after a brief delay
-      setTimeout(checkSocket, 500);
+      setTimeout(() => checkSocket(0), 500);
     });
   }
 
