@@ -103,7 +103,7 @@ export type PodmanMachineInspectOutput = {
  */
 export default class PodmanRuntime {
   private ARCHESTRA_MACHINE_NAME = 'archestra-ai-machine';
-  private LINUX_SOCKET_PATH = '/tmp/archestra-podman.sock';
+  private LINUX_SOCKET_PATH = `${process.env.XDG_RUNTIME_DIR || `/run/user/${process.getuid?.() || '1000'}`}/podman/archestra-podman.sock`;
   private isLinux = process.platform === 'linux';
   private podmanServiceProcess: ChildProcess | null = null;
 
@@ -376,6 +376,18 @@ export default class PodmanRuntime {
    * This creates a socket that can be used to communicate with Podman.
    */
   private async startPodmanSystemService() {
+    // Ensure the socket directory exists
+    const socketDir = path.dirname(this.LINUX_SOCKET_PATH);
+    if (!fs.existsSync(socketDir)) {
+      try {
+        fs.mkdirSync(socketDir, { recursive: true });
+        log.info(`Created socket directory: ${socketDir}`);
+      } catch (error) {
+        log.error(`Failed to create socket directory: ${error}`);
+        throw error;
+      }
+    }
+
     // Clean up any existing socket
     if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
       try {
