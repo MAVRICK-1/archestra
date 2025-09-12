@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
@@ -103,6 +103,9 @@ export type PodmanMachineInspectOutput = {
  */
 export default class PodmanRuntime {
   private ARCHESTRA_MACHINE_NAME = 'archestra-ai-machine';
+  private LINUX_SOCKET_PATH = '/tmp/archestra-podman.sock';
+  private isLinux = process.platform === 'linux';
+  private podmanServiceProcess: ChildProcess | null = null;
 
   private machineStartupPercentage = 0;
   private machineStartupMessage: string | null = null;
@@ -112,7 +115,7 @@ export default class PodmanRuntime {
   private onMachineInstallationError: (error: Error) => void = () => {};
 
   private registryAuthFilePath: string;
-  private binaryPath = getBinaryExecPath('podman-remote-static-v5.5.2');
+  private binaryPath = this.isLinux ? 'podman' : getBinaryExecPath('podman-remote-static-v5.5.2');
 
   private baseImage: PodmanImage;
 
@@ -175,8 +178,9 @@ export default class PodmanRuntime {
          * See here, `CONTAINERS_HELPER_BINARY_DIR` isn't well documented, but here is what I've found:
          * https://github.com/containers/podman/blob/0c4c9e4fbc0cf9cdcdcb5ea1683a2ffeddb03e77/hack/bats#L131
          * https://docs.podman.io/en/stable/markdown/podman.1.html#environment-variables
+         * Note: Only needed for macOS/Windows where we use bundled binaries
          */
-        CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+        ...(this.isLinux ? {} : { CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory }),
 
         /**
          * Basically we don't want the podman machine to use the user's docker config (if one exists)
@@ -368,6 +372,80 @@ export default class PodmanRuntime {
   }
 
   /**
+   * Starts the Podman system service on Linux.
+   * This creates a socket that can be used to communicate with Podman.
+   */
+  private async startPodmanSystemService() {
+    // Clean up any existing socket
+    if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
+      try {
+        fs.unlinkSync(this.LINUX_SOCKET_PATH);
+      } catch (error) {
+        log.warn(`Failed to remove existing socket: ${error}`);
+      }
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      const socketUri = `unix://${this.LINUX_SOCKET_PATH}`;
+      log.info(`Starting Podman system service at ${socketUri}`);
+
+      this.podmanServiceProcess = spawn(this.binaryPath, ['system', 'service', '--time=0', socketUri], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        detached: false,
+      });
+
+      let hasStarted = false;
+      let errorOutput = '';
+
+      const checkSocket = () => {
+        if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
+          hasStarted = true;
+          this.machineStartupPercentage = 100;
+          this.machineStartupMessage = 'Podman service started successfully';
+          log.info('Podman system service started successfully');
+          resolve();
+        } else {
+          setTimeout(checkSocket, 100);
+        }
+      };
+
+      this.podmanServiceProcess.stdout?.on('data', (data) => {
+        const output = data.toString();
+        log.info(`[Podman service stdout]: ${output}`);
+        if (output.includes('API service listening')) {
+          this.machineStartupPercentage = 50;
+          this.machineStartupMessage = 'Podman API service starting...';
+          // Start checking for socket
+          setTimeout(checkSocket, 100);
+        }
+      });
+
+      this.podmanServiceProcess.stderr?.on('data', (data) => {
+        errorOutput += data.toString();
+        log.error(`[Podman service stderr]: ${data}`);
+      });
+
+      this.podmanServiceProcess.on('error', (error) => {
+        if (!hasStarted) {
+          this.machineStartupError = error.message;
+          reject(error);
+        }
+      });
+
+      this.podmanServiceProcess.on('exit', (code, signal) => {
+        if (!hasStarted) {
+          const errorMessage = `Podman service exited unexpectedly with code ${code}, signal ${signal}. Error: ${errorOutput}`;
+          this.machineStartupError = errorMessage;
+          reject(new Error(errorMessage));
+        }
+      });
+
+      // Start checking for socket file after a brief delay
+      setTimeout(checkSocket, 500);
+    });
+  }
+
+  /**
    * This method will check if the archesta podman machine is installed and running.
    * - If it's not installed, it will install it and start it.
    * - If it's installed but not running, it will start it.
@@ -379,6 +457,22 @@ export default class PodmanRuntime {
    * or output to stderr, so we're not going to do anything with it for now
    */
   ensureArchestraMachineIsRunning() {
+    // On Linux, use podman system service instead of podman machine
+    if (this.isLinux) {
+      this.machineStartupPercentage = 10;
+      this.machineStartupMessage = 'Starting Podman service on Linux...';
+      
+      this.startPodmanSystemService()
+        .then(() => {
+          this.onMachineInstallationSuccess();
+        })
+        .catch((error) => {
+          this.handleMachineError(error);
+        });
+      return;
+    }
+
+    // Original code for macOS/Windows
     this.runCommand<PodmanMachineListOutput>({
       command: ['machine', 'ls', '--format', 'json'],
       pipes: {
@@ -421,11 +515,43 @@ export default class PodmanRuntime {
   }
 
   /**
+   * Stops the Podman system service on Linux.
+   */
+  private stopPodmanSystemService() {
+    if (this.podmanServiceProcess) {
+      log.info('Stopping Podman system service...');
+      this.podmanServiceProcess.kill('SIGTERM');
+      this.podmanServiceProcess = null;
+      
+      // Clean up socket file
+      if (fs.existsSync(this.LINUX_SOCKET_PATH)) {
+        try {
+          fs.unlinkSync(this.LINUX_SOCKET_PATH);
+          log.info('Removed Podman socket file');
+        } catch (error) {
+          log.warn(`Failed to remove socket file: ${error}`);
+        }
+      }
+      
+      this.machineStartupPercentage = 0;
+      this.machineStartupMessage = 'Podman service stopped';
+      this.machineStartupError = null;
+    }
+  }
+
+  /**
    * This method will stop the archesta podman machine.
    *
    * NOTE: for now we can just ignore stdio, stderr, and onExit callbacks..
    */
   stopArchestraMachine() {
+    // On Linux, stop the system service instead
+    if (this.isLinux) {
+      this.stopPodmanSystemService();
+      return;
+    }
+
+    // Original code for macOS/Windows
     this.runCommand({
       command: ['machine', 'stop', this.ARCHESTRA_MACHINE_NAME],
       pipes: {
@@ -448,6 +574,13 @@ export default class PodmanRuntime {
    * @param force - Force removal of the machine, even if it is running
    */
   async removeArchestraMachine(force: boolean = true): Promise<void> {
+    // On Linux, just stop the service
+    if (this.isLinux) {
+      this.stopPodmanSystemService();
+      return Promise.resolve();
+    }
+
+    // Original code for macOS/Windows
     return new Promise((resolve, reject) => {
       const command = ['machine', 'rm'];
 
@@ -499,6 +632,16 @@ export default class PodmanRuntime {
    * /Users/myuser/.local/share/containers/podman/machine/archestra-ai-machine/podman.sock
    */
   async getSocketAddress(): Promise<string> {
+    // On Linux, return the system service socket path
+    if (this.isLinux) {
+      if (!fs.existsSync(this.LINUX_SOCKET_PATH)) {
+        throw new Error(`Podman socket not found at ${this.LINUX_SOCKET_PATH}. Is the Podman service running?`);
+      }
+      log.info(`Using Linux Podman socket: ${this.LINUX_SOCKET_PATH}`);
+      return this.LINUX_SOCKET_PATH;
+    }
+
+    // Original code for macOS/Windows
     return new Promise((resolve, reject) => {
       let output = '';
       this.runCommand({
