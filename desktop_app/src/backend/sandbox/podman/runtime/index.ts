@@ -198,6 +198,15 @@ export default class PodmanRuntime {
          * REGISTRY_AUTH_FILE environment variable. This can be done with export REGISTRY_AUTH_FILE=path.
          */
         REGISTRY_AUTH_FILE: this.registryAuthFilePath,
+
+        /**
+         * On Linux, we need to tell Podman where to find our bundled conmon binary
+         * since it's not in the standard system paths (/usr/bin, /usr/sbin, etc.)
+         * Our containers.conf specifies the path to the bundled conmon at /usr/local/lib/podman/conmon
+         */
+        ...(IS_LINUX && {
+          CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+        }),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -414,6 +423,14 @@ export default class PodmanRuntime {
           ...process.env,
           // Set environment variables for self-contained operation
           CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+          /**
+           * On Linux, we need to tell Podman where to find our bundled conmon binary
+           * since it's not in the standard system paths (/usr/bin, /usr/sbin, etc.)
+           * Our containers.conf specifies the path to the bundled conmon at /usr/local/lib/podman/conmon
+           */
+          ...(IS_LINUX && {
+            CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+          }),
         },
       });
 
