@@ -207,6 +207,15 @@ export default class PodmanRuntime {
         CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
 
         /**
+         * On Linux, add our bundled directory to PATH so Podman can find our fake newuidmap/newgidmap binaries
+         * These placeholder scripts allow Podman to run in single UID mode without the actual shadow-utils binaries
+         */
+        ...(IS_LINUX && {
+          PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
+          CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+        }),
+
+        /**
          * Basically we don't want the podman machine to use the user's docker config (if one exists)
          *
          * From the podman docs (https://docs.podman.io/en/v5.2.2/markdown/podman-create.1.html#authfile-path):
@@ -438,6 +447,16 @@ export default class PodmanRuntime {
             ...process.env,
             // Set environment variables for self-contained operation
             CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+
+            /**
+             * On Linux, add our bundled directory to PATH so Podman can find our fake newuidmap/newgidmap binaries
+             * These placeholder scripts allow Podman to run in single UID mode without the actual shadow-utils binaries
+             * Also set CONTAINERS_CONF to use our custom configuration with ignore_chown_errors
+             */
+            ...(IS_LINUX && {
+              PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
+              CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+            }),
           },
         }
       );

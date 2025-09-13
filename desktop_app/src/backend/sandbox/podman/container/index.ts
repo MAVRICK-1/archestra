@@ -711,6 +711,17 @@ export default class PodmanContainer {
          * Don't auto-remove the container - we need it to persist for MCP communication
          */
         remove: false,
+        /**
+         * On Linux, use keep-id mode for user namespace to run with single UID mapping
+         * This allows containers to run without proper newuidmap/newgidmap binaries
+         *
+         * https://docs.podman.io/en/v4.4/markdown/options/userns.container.html
+         */
+        ...(process.platform === 'linux' && {
+          userns: {
+            nsmode: 'keep-id',
+          },
+        }),
       };
 
       // Only add command if we have one (let container use its default CMD/ENTRYPOINT if not)

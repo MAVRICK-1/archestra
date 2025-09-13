@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake newuidmap for bundled Podman on Linux
+# This is a placeholder that allows Podman to run in single UID mode
+# without requiring the actual newuidmap binary from shadow-utils
+exit 0

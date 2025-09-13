@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fake newgidmap for bundled Podman on Linux
+# This is a placeholder that allows Podman to run in single GID mode
+# without requiring the actual newgidmap binary from shadow-utils
+exit 0
