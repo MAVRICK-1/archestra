@@ -118,8 +118,8 @@ export default class PodmanRuntime {
   private onMachineInstallationError: (error: Error) => void = () => {};
 
   private registryAuthFilePath: string;
-  private binaryPath = IS_LINUX
-    ? path.join(BINARIES_DIRECTORY, 'podman', 'usr', 'local', 'bin', 'podman')
+  private podmanBinaryPath = IS_LINUX
+    ? path.join(BINARIES_DIRECTORY, 'podman', 'podman')
     : getBinaryExecPath('podman-remote-static-v5.5.2');
 
   private baseImage: PodmanImage;
@@ -144,11 +144,17 @@ export default class PodmanRuntime {
    * On Linux, add the --conmon flag to specify the path to our bundled conmon binary
    * https://docs.podman.io/en/stable/markdown/podman.1.html#conmon
    */
-  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'usr', 'local', 'lib', 'podman', 'conmon');
+  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'podman', 'conmon');
+
+  /**
+   * On Linux, add the --runtime flag to specify the path to our bundled crun runtime binary
+   * https://docs.podman.io/en/stable/markdown/podman.1.html#runtime-value
+   */
+  private crunRuntimeBinaryPath = path.join(this.helperBinariesDirectory, 'podman', 'crun');
 
   constructor(onMachineInstallationSuccess: () => void, onMachineInstallationError: (error: Error) => void) {
     log.info(
-      `[PodmanRuntime] constructor: is_linux=${IS_LINUX}, binaries_directory=${BINARIES_DIRECTORY}, podman_binary_path=${this.binaryPath}, helper_binaries_directory=${this.helperBinariesDirectory}`
+      `[PodmanRuntime] constructor: is_linux=${IS_LINUX}, binaries_directory=${BINARIES_DIRECTORY}, podman_binary_path=${this.podmanBinaryPath}, helper_binaries_directory=${this.helperBinariesDirectory}`
     );
 
     this.baseImage = new PodmanImage();
@@ -173,19 +179,24 @@ export default class PodmanRuntime {
     }
   }
 
+  private addLinuxSpecificFlags(command: string[]): string[] {
+    if (IS_LINUX) {
+      command.unshift('--conmon', this.conmonBinaryPath, '--runtime', this.crunRuntimeBinaryPath);
+    }
+    return command;
+  }
+
   private runCommand<T extends object | object[]>({
     command,
     pipes: { onStdout, onStderr, onExit, onError },
   }: RunCommandOptions<T>): void {
-    if (IS_LINUX) {
-      command.unshift('--conmon', this.conmonBinaryPath);
-    }
+    command = this.addLinuxSpecificFlags(command);
 
-    const commandForLogs = `${this.binaryPath} ${command.join(' ')}`;
+    const commandForLogs = `${this.podmanBinaryPath} ${command.join(' ')}`;
 
     log.info(`[Podman command]: running ${commandForLogs}`);
 
-    const commandProcess = spawn(this.binaryPath, command, {
+    const commandProcess = spawn(this.podmanBinaryPath, command, {
       env: {
         ...process.env,
         /**
@@ -418,8 +429,8 @@ export default class PodmanRuntime {
       this.machineStartupPercentage = 25;
 
       this.podmanServiceProcess = spawn(
-        this.binaryPath,
-        ['--conmon', this.conmonBinaryPath, 'system', 'service', '--time=0', socketUri],
+        this.podmanBinaryPath,
+        this.addLinuxSpecificFlags(['system', 'service', '--time=0', socketUri]),
         {
           stdio: ['ignore', 'pipe', 'pipe'],
           detached: false,
