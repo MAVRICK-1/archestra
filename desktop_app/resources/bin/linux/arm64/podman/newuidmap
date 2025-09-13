@@ -1,9 +1,9 @@
 #!/bin/sh
 # Custom newuidmap for bundled Podman on Linux
-# Maps the current user's UID as root (0) in the container namespace
-# This allows single UID mapping without the actual shadow-utils binary
+# Maps a range of UIDs to handle multi-UID images
 
 # Arguments: $1 = PID, $2 = inner_uid, $3 = outer_uid, $4 = count
-# For single UID mapping, we map current user's UID to root (0)
+# Try to map 65536 UIDs first, fallback to single if that fails
+echo "0 $(id -u) 65536" > /proc/$1/uid_map 2>/dev/null || \
 echo "0 $(id -u) 1" > /proc/$1/uid_map 2>/dev/null || true
 exit 0

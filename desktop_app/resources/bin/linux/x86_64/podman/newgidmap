@@ -1,11 +1,11 @@
 #!/bin/sh
 # Custom newgidmap for bundled Podman on Linux
-# Maps the current user's GID as root (0) in the container namespace
-# This allows single GID mapping without the actual shadow-utils binary
+# Maps a range of GIDs to handle images with various group IDs
 
 # Arguments: $1 = PID, $2 = inner_gid, $3 = outer_gid, $4 = count
 # First deny setgroups to prevent permission issues
 echo deny > /proc/$1/setgroups 2>/dev/null || true
-# Map current user's GID to root (0)
+# Try to map 65536 GIDs to handle all GIDs in the image
+echo "0 $(id -g) 65536" > /proc/$1/gid_map 2>/dev/null || \
 echo "0 $(id -g) 1" > /proc/$1/gid_map 2>/dev/null || true
 exit 0
