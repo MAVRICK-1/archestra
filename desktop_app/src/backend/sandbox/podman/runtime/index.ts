@@ -1,5 +1,6 @@
 import { ChildProcess, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { z } from 'zod';
 
@@ -156,6 +157,29 @@ export default class PodmanRuntime {
     if (!fs.existsSync(this.registryAuthFilePath)) {
       fs.mkdirSync(path.dirname(this.registryAuthFilePath), { recursive: true });
       fs.writeFileSync(this.registryAuthFilePath, '{}');
+    }
+
+    // On Linux, copy our bundled policy.json to the user's config directory
+    // so Podman can find it in the expected location
+    if (IS_LINUX) {
+      const userConfigDir = path.join(os.homedir(), '.config', 'containers');
+      if (!fs.existsSync(userConfigDir)) {
+        fs.mkdirSync(userConfigDir, { recursive: true });
+        log.info(`Created containers config directory: ${userConfigDir}`);
+      }
+
+      const sourcePolicyPath = path.join(this.helperBinariesDirectory, 'etc', 'containers', 'policy.json');
+      const destPolicyPath = path.join(userConfigDir, 'policy.json');
+
+      // Copy our bundled policy.json to user's config
+      if (fs.existsSync(sourcePolicyPath) && !fs.existsSync(destPolicyPath)) {
+        fs.copyFileSync(sourcePolicyPath, destPolicyPath);
+        log.info(`Copied policy.json to ${destPolicyPath}`);
+      } else if (fs.existsSync(destPolicyPath)) {
+        log.info(`Policy.json already exists at ${destPolicyPath}`);
+      } else {
+        log.warn(`Source policy.json not found at ${sourcePolicyPath}`);
+      }
     }
   }
 
