@@ -1,5 +1,9 @@
 #!/bin/sh
-# Fake newuidmap for bundled Podman on Linux
-# This is a placeholder that allows Podman to run in single UID mode
-# without requiring the actual newuidmap binary from shadow-utils
+# Custom newuidmap for bundled Podman on Linux
+# Maps the current user's UID as root (0) in the container namespace
+# This allows single UID mapping without the actual shadow-utils binary
+
+# Arguments: $1 = PID, $2 = inner_uid, $3 = outer_uid, $4 = count
+# For single UID mapping, we map current user's UID to root (0)
+echo "0 $(id -u) 1" > /proc/$1/uid_map 2>/dev/null || true
 exit 0

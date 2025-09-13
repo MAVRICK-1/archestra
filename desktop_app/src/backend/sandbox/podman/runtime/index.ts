@@ -140,18 +140,6 @@ export default class PodmanRuntime {
    */
   private helperBinariesDirectory = IS_LINUX ? path.join(BINARIES_DIRECTORY, 'podman') : getBinariesDirectory();
 
-  /**
-   * On Linux, add the --conmon flag to specify the path to our bundled conmon binary
-   * https://docs.podman.io/en/stable/markdown/podman.1.html#conmon
-   */
-  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'conmon');
-
-  /**
-   * On Linux, add the --runtime flag to specify the path to our bundled crun runtime binary
-   * https://docs.podman.io/en/stable/markdown/podman.1.html#runtime-value
-   */
-  private crunRuntimeBinaryPath = path.join(this.helperBinariesDirectory, 'crun');
-
   constructor(onMachineInstallationSuccess: () => void, onMachineInstallationError: (error: Error) => void) {
     log.info(
       `[PodmanRuntime] constructor: is_linux=${IS_LINUX}, binaries_directory=${BINARIES_DIRECTORY}, podman_binary_path=${this.podmanBinaryPath}, helper_binaries_directory=${this.helperBinariesDirectory}`
@@ -181,7 +169,21 @@ export default class PodmanRuntime {
 
   private addLinuxSpecificFlags(command: string[]): string[] {
     if (IS_LINUX) {
-      command.unshift('--conmon', this.conmonBinaryPath, '--runtime', this.crunRuntimeBinaryPath);
+      command.unshift(
+        /**
+         * On Linux, add the --conmon flag to specify the path to our bundled conmon binary
+         * https://docs.podman.io/en/stable/markdown/podman.1.html#conmon
+         */
+        '--conmon',
+        path.join(this.helperBinariesDirectory, 'conmon'),
+        /**
+         * Use runc instead of crun as it may handle single UID mapping better
+         * Also specify conmon path for container monitoring
+         * https://docs.podman.io/en/v5.5.2/markdown/podman.1.html#runtime-value
+         */
+        '--runtime',
+        path.join(this.helperBinariesDirectory, 'runc')
+      );
     }
     return command;
   }
