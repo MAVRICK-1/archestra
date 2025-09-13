@@ -144,13 +144,13 @@ export default class PodmanRuntime {
    * On Linux, add the --conmon flag to specify the path to our bundled conmon binary
    * https://docs.podman.io/en/stable/markdown/podman.1.html#conmon
    */
-  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'podman', 'conmon');
+  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'conmon');
 
   /**
    * On Linux, add the --runtime flag to specify the path to our bundled crun runtime binary
    * https://docs.podman.io/en/stable/markdown/podman.1.html#runtime-value
    */
-  private crunRuntimeBinaryPath = path.join(this.helperBinariesDirectory, 'podman', 'crun');
+  private crunRuntimeBinaryPath = path.join(this.helperBinariesDirectory, 'crun');
 
   constructor(onMachineInstallationSuccess: () => void, onMachineInstallationError: (error: Error) => void) {
     log.info(
