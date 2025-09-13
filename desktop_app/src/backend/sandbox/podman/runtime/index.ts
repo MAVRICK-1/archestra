@@ -140,6 +140,12 @@ export default class PodmanRuntime {
    */
   private helperBinariesDirectory = IS_LINUX ? path.join(BINARIES_DIRECTORY, 'podman') : getBinariesDirectory();
 
+  /**
+   * On Linux, add the --conmon flag to specify the path to our bundled conmon binary
+   * https://docs.podman.io/en/stable/markdown/podman.1.html#conmon
+   */
+  private conmonBinaryPath = path.join(this.helperBinariesDirectory, 'usr', 'local', 'lib', 'podman', 'conmon');
+
   constructor(onMachineInstallationSuccess: () => void, onMachineInstallationError: (error: Error) => void) {
     log.info(
       `[PodmanRuntime] constructor: is_linux=${IS_LINUX}, binaries_directory=${BINARIES_DIRECTORY}, podman_binary_path=${this.binaryPath}, helper_binaries_directory=${this.helperBinariesDirectory}`
@@ -171,6 +177,10 @@ export default class PodmanRuntime {
     command,
     pipes: { onStdout, onStderr, onExit, onError },
   }: RunCommandOptions<T>): void {
+    if (IS_LINUX) {
+      command.unshift('--conmon', this.conmonBinaryPath);
+    }
+
     const commandForLogs = `${this.binaryPath} ${command.join(' ')}`;
 
     log.info(`[Podman command]: running ${commandForLogs}`);
@@ -198,15 +208,6 @@ export default class PodmanRuntime {
          * REGISTRY_AUTH_FILE environment variable. This can be done with export REGISTRY_AUTH_FILE=path.
          */
         REGISTRY_AUTH_FILE: this.registryAuthFilePath,
-
-        /**
-         * On Linux, we need to tell Podman where to find our bundled conmon binary
-         * since it's not in the standard system paths (/usr/bin, /usr/sbin, etc.)
-         * Our containers.conf specifies the path to the bundled conmon at /usr/local/lib/podman/conmon
-         */
-        ...(IS_LINUX && {
-          CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
-        }),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -416,23 +417,19 @@ export default class PodmanRuntime {
       this.machineStartupMessage = 'Starting Podman service...';
       this.machineStartupPercentage = 25;
 
-      this.podmanServiceProcess = spawn(this.binaryPath, ['system', 'service', '--time=0', socketUri], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: false,
-        env: {
-          ...process.env,
-          // Set environment variables for self-contained operation
-          CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
-          /**
-           * On Linux, we need to tell Podman where to find our bundled conmon binary
-           * since it's not in the standard system paths (/usr/bin, /usr/sbin, etc.)
-           * Our containers.conf specifies the path to the bundled conmon at /usr/local/lib/podman/conmon
-           */
-          ...(IS_LINUX && {
-            CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
-          }),
-        },
-      });
+      this.podmanServiceProcess = spawn(
+        this.binaryPath,
+        ['--conmon', this.conmonBinaryPath, 'system', 'service', '--time=0', socketUri],
+        {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          detached: false,
+          env: {
+            ...process.env,
+            // Set environment variables for self-contained operation
+            CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+          },
+        }
+      );
 
       let hasStarted = false;
       let errorOutput = '';
