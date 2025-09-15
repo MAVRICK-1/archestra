@@ -440,20 +440,16 @@ export default class PodmanRuntime {
     return new Promise((resolve) => {
       log.info('Running podman system migrate to handle storage inconsistencies...');
 
-      const migrateProcess = spawn(
-        this.podmanBinaryPath,
-        this.addLinuxSpecificFlags(['system', 'migrate']),
-        {
-          env: {
-            ...process.env,
-            CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
-            PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
-            CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
-            REGISTRY_AUTH_FILE: this.registryAuthFilePath,
-          },
-          stdio: ['ignore', 'pipe', 'pipe'],
-        }
-      );
+      const migrateProcess = spawn(this.podmanBinaryPath, this.addLinuxSpecificFlags(['system', 'migrate']), {
+        env: {
+          ...process.env,
+          CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+          PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
+          CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+          REGISTRY_AUTH_FILE: this.registryAuthFilePath,
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
 
       let stderr = '';
 

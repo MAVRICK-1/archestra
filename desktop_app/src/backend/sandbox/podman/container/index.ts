@@ -358,7 +358,7 @@ export default class PodmanContainer {
           }),
           // Add timeout and connection settings to prevent hanging
           headersTimeout: 30000, // 30 seconds
-          bodyTimeout: 300000,   // 5 minutes for body timeout
+          bodyTimeout: 300000, // 5 minutes for body timeout
           keepAliveTimeout: 30000,
         }
       );
