@@ -462,7 +462,7 @@ export const createArchestraMcpServer = () => {
                   t.analysis?.is_read !== null
                     ? ` [${t.analysis.is_read ? 'R' : ''}${t.analysis.is_write ? 'W' : ''}]`
                     : '';
-                return `  ${status} ${t.name}${analysisInfo}: ${t.description || 'No description'}`;
+                return `  ${status} ${t.id}${analysisInfo}: ${t.description || 'No description'}`;
               })
               .join('\n');
 
@@ -498,11 +498,13 @@ export const createArchestraMcpServer = () => {
 
   archestraMcpServer.tool(
     'enable_tools',
-    'Enable specific tools for use in the current chat',
+    'Enable specific tools for use in the current chat. First call list_available_tools to see tool IDs, then pass them here. Example: {"toolIds": ["filesystem__read_file", "filesystem__write_file", "remote-mcp__search_repositories"]}',
     z.object({
       toolIds: z
         .array(z.string())
-        .describe('Array of tool IDs to enable (e.g., ["google__gmail_send", "filesystem__read_file"])'),
+        .describe(
+          'Array of tool IDs from list_available_tools output. Example: ["archestra__list_memories", "filesystem__read_file", "remote-mcp__create_issue"]'
+        ),
     }) as any,
     async (context: any) => {
       // Workaround for fastify-mcp bug: get arguments from global
@@ -532,13 +534,62 @@ export const createArchestraMcpServer = () => {
           };
         }
 
-        const updatedTools = await ChatModel.addSelectedTools(chatId, toolIds);
+        // Get all available tools to validate the tool IDs exist
+        const allTools = toolAggregator.getAllAvailableTools();
+        const availableToolIds = new Set(allTools.map((t) => t.id));
+
+        // Get currently selected tools for the chat
+        const currentSelectedTools = await ChatModel.getSelectedTools(chatId);
+        const currentEnabledSet =
+          currentSelectedTools === null
+            ? new Set(availableToolIds) // null means all tools are enabled
+            : new Set(currentSelectedTools);
+
+        // Validate each tool ID
+        const errors: string[] = [];
+        const validToolsToEnable: string[] = [];
+
+        for (const toolId of toolIds) {
+          if (!availableToolIds.has(toolId)) {
+            errors.push(`Tool '${toolId}' does not exist`);
+          } else if (currentEnabledSet.has(toolId)) {
+            errors.push(`Tool '${toolId}' is already enabled`);
+          } else {
+            validToolsToEnable.push(toolId);
+          }
+        }
+
+        // If there are any errors, return them
+        if (errors.length > 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error enabling tools:\n${errors.join('\n')}`,
+              },
+            ],
+          };
+        }
+
+        // If no valid tools to enable, return message
+        if (validToolsToEnable.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'No tools to enable. All specified tools are either non-existent or already enabled.',
+              },
+            ],
+          };
+        }
+
+        const updatedTools = await ChatModel.addSelectedTools(chatId, validToolsToEnable);
 
         return {
           content: [
             {
               type: 'text',
-              text: `Successfully enabled ${toolIds.length} tool(s). Total enabled: ${updatedTools.length}`,
+              text: `Successfully enabled ${validToolsToEnable.length} tool(s). Total enabled: ${updatedTools.length}`,
             },
           ],
         };
@@ -589,13 +640,62 @@ export const createArchestraMcpServer = () => {
           };
         }
 
-        const updatedTools = await ChatModel.removeSelectedTools(chatId, toolIds);
+        // Get all available tools to validate the tool IDs exist
+        const allTools = toolAggregator.getAllAvailableTools();
+        const availableToolIds = new Set(allTools.map((t) => t.id));
+
+        // Get currently selected tools for the chat
+        const currentSelectedTools = await ChatModel.getSelectedTools(chatId);
+        const currentEnabledSet =
+          currentSelectedTools === null
+            ? new Set(availableToolIds) // null means all tools are enabled
+            : new Set(currentSelectedTools);
+
+        // Validate each tool ID
+        const errors: string[] = [];
+        const validToolsToDisable: string[] = [];
+
+        for (const toolId of toolIds) {
+          if (!availableToolIds.has(toolId)) {
+            errors.push(`Tool '${toolId}' does not exist`);
+          } else if (!currentEnabledSet.has(toolId)) {
+            errors.push(`Tool '${toolId}' is already disabled`);
+          } else {
+            validToolsToDisable.push(toolId);
+          }
+        }
+
+        // If there are any errors, return them
+        if (errors.length > 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: `Error disabling tools:\n${errors.join('\n')}`,
+              },
+            ],
+          };
+        }
+
+        // If no valid tools to disable, return message
+        if (validToolsToDisable.length === 0) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: 'No tools to disable. All specified tools are either non-existent or already disabled.',
+              },
+            ],
+          };
+        }
+
+        const updatedTools = await ChatModel.removeSelectedTools(chatId, validToolsToDisable);
 
         return {
           content: [
             {
               type: 'text',
-              text: `Successfully disabled ${toolIds.length} tool(s). Remaining enabled: ${updatedTools.length}`,
+              text: `Successfully disabled ${validToolsToDisable.length} tool(s). Remaining enabled: ${updatedTools.length}`,
             },
           ],
         };

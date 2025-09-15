@@ -182,7 +182,11 @@ const forgeConfig: ForgeConfig = {
     //   description,
     //   setupIcon: './icons/icon.ico',
     // }),
-    new MakerZIP({}, ['win32']),
+    /**
+     * NOTE: zip assets are required for update-electron-app (ie. auto updater) to work properly
+     * see https://github.com/electron/update-electron-app
+     */
+    new MakerZIP({}, ['darwin', 'win32']),
     new MakerRpm({
       options: {
         name: productName,

@@ -9,6 +9,7 @@ import EmptyChatState from '@ui/components/Chat/EmptyChatState';
 import SystemPrompt from '@ui/components/Chat/SystemPrompt';
 import config from '@ui/config';
 import { useMessageActions } from '@ui/hooks/useMessageActions';
+import { getAllMemories } from '@ui/lib/clients/archestra/api/gen';
 import { useChatStore, useCloudProvidersStore, useOllamaStore, useToolsStore } from '@ui/stores';
 import { useStatusBarStore } from '@ui/stores/status-bar-store';
 
@@ -18,10 +19,12 @@ export const Route = createFileRoute('/chat')({
 
 function ChatPage() {
   const { getCurrentChat, getCurrentChatTitle, saveDraftMessage, getDraftMessage, clearDraftMessage } = useChatStore();
-  const { selectedToolIds } = useToolsStore();
+  const { selectedToolIds, setOnlyTools } = useToolsStore();
   const { selectedModel } = useOllamaStore();
   const { availableCloudProviderModels } = useCloudProvidersStore();
   const { setChatInference } = useStatusBarStore();
+  const [hasTooManyTools, setHasTooManyTools] = useState(false);
+  const [hasLoadedMemories, setHasLoadedMemories] = useState(false);
 
   const currentChat = getCurrentChat();
   const currentChatSessionId = currentChat?.sessionId || '';
@@ -30,6 +33,11 @@ function ChatPage() {
 
   // Get current input from draft messages
   const currentInput = currentChat ? getDraftMessage(currentChat.id) : '';
+
+  // Reset memory loading flag when chat changes
+  useEffect(() => {
+    setHasLoadedMemories(false);
+  }, [currentChatSessionId]);
 
   // We use useRef because prepareSendMessagesRequest captures values when created.
   // Without ref, switching models/providers wouldn't work - it would always use the old values.
@@ -73,13 +81,36 @@ function ChatPage() {
     });
   }, [currentChatSessionId, getCurrentChat]);
 
-  const { sendMessage, messages, setMessages, stop, status, error, regenerate } = useChat({
+  const { sendMessage, messages, setMessages, stop, status, regenerate } = useChat({
     id: currentChatSessionId || 'temp-id', // use the provided chat ID or a temp ID
     transport,
     onError: (error) => {
       console.error('Chat error:', error);
     },
   });
+
+  // ================ Running on background logic ================ //
+  const pendingPrompts = useChatStore((s) => s.pendingPrompts);
+  const setPendingPrompts = useChatStore((s) => s.setPendingPrompts);
+  const removePendingPrompt = useChatStore((s) => s.removePendingPrompt);
+
+  const pendingPrompt = pendingPrompts.get(currentChatSessionId);
+
+  // When streaming finishes and there is an assistant reply and the second to
+  // last message is the same as the pending prompt, remove the pending prompt
+  useEffect(() => {
+    if (status === 'ready' && currentChatSessionId) {
+      const secondToLastMessage = messages.at(-2);
+      const lastMessage = messages.at(-1);
+
+      const isSecondToLastMessageSameAsPendingPrompt =
+        secondToLastMessage?.parts?.[0]?.type === 'text' && secondToLastMessage?.parts?.[0]?.text === pendingPrompt;
+      const isLastMessageAssistant = lastMessage?.role === 'assistant';
+
+      if (isLastMessageAssistant && isSecondToLastMessageSameAsPendingPrompt) removePendingPrompt(currentChatSessionId);
+    }
+  }, [status, currentChatSessionId, messages]);
+  // ================================== //
 
   const isLoading = status === 'streaming';
   const [regeneratingIndex, setRegeneratingIndex] = useState<number | null>(null);
@@ -179,17 +210,21 @@ function ChatPage() {
 
   // Load messages from database when chat changes
   useEffect(() => {
-    if (currentChatMessages && currentChatMessages.length > 0) {
-      // Messages are already UIMessage type
-      setMessages(currentChatMessages);
-    } else {
-      // Clear messages when no chat or empty chat
-      setMessages([]);
+    // Only update messages if we have a valid chat
+    if (currentChat && currentChatSessionId) {
+      if (currentChatMessages && currentChatMessages.length > 0) {
+        // Messages are already UIMessage type
+        setMessages(currentChatMessages);
+      } else {
+        // Clear messages when chat exists but has no messages
+        setMessages([]);
+      }
     }
-  }, [currentChatSessionId]); // Only depend on session ID to avoid infinite loop
+    // Don't call setMessages when there's no chat to avoid triggering updates during deletion
+  }, [currentChatSessionId, currentChatMessages, currentChat]); // Now also depend on currentChat
 
   // Simple debounce implementation
-  const debounceRef = useRef<NodeJS.Timeout>();
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
 
   const debouncedSaveDraft = useCallback((chatId: number, content: string) => {
     if (debounceRef.current) {
@@ -211,40 +246,166 @@ function ChatPage() {
     }
   };
 
-  const handleSubmit = (e?: React.FormEvent<HTMLFormElement>) => {
+  const loadMemoriesIfNeeded = async () => {
+    // Only load memories for the first message in a chat
+    if (messages.length === 0 && !hasLoadedMemories) {
+      try {
+        const { data } = await getAllMemories();
+        if (data && data.memories && data.memories.length > 0) {
+          // Format memories as a system message to include in context
+          const memoriesText = data.memories.map((m) => `${m.name}: ${m.value}`).join('\n');
+
+          // Add a system message with the memories
+          const systemMessage: UIMessage = {
+            id: 'system-memories',
+            role: 'system',
+            content: `Previous memories loaded:\n${memoriesText}`,
+          };
+
+          // Prepend the system message to the messages
+          setMessages([systemMessage]);
+        }
+        setHasLoadedMemories(true);
+      } catch (error) {
+        console.error('Failed to load memories:', error);
+        // Continue even if memory loading fails
+        setHasLoadedMemories(true);
+      }
+    }
+  };
+
+  const handleSubmit = async (e?: React.FormEvent<HTMLFormElement>) => {
     e?.preventDefault();
+    if (isSubmittingDisabled) return;
     if (currentInput.trim() && currentChat) {
+      // Load memories before sending the first message
+      await loadMemoriesIfNeeded();
+
+      let messageText = currentInput;
+
+      // If more than 20 tools are selected, adjust the tools and message
+      if (hasTooManyTools) {
+        // Set only the list_available_tools and enable_tools from Archestra
+        await setOnlyTools(['archestra__list_available_tools', 'archestra__enable_tools', 'archestra__disable_tools']);
+
+        // Prepend instruction to the message
+        messageText = `You currently have only list_available_tools and enable_tools enabled. Follow these steps:
+1. Call list_available_tools to see all available tool IDs
+2. Call enable_tools with the specific tool IDs you need, for example: {"toolIds": ["filesystem__read_file", "filesystem__write_file"]}
+3. After enabling the necessary tools, disable Archestra tools using disable_tools.
+4. After, proceed with this task: 
+
+${currentInput}`;
+      }
+
       setIsSubmitting(true);
       setSubmissionStartTime(Date.now());
-      sendMessage({ text: currentInput });
+      sendMessage({ text: messageText });
+      setPendingPrompts(currentChatSessionId, messageText);
       clearDraftMessage(currentChat.id);
     }
   };
 
-  const handlePromptSelect = (prompt: string) => {
+  const handlePromptSelect = async (prompt: string) => {
+    // Load memories before sending the first message
+    await loadMemoriesIfNeeded();
+
     setIsSubmitting(true);
     setSubmissionStartTime(Date.now());
     // Directly send the prompt when a tile is clicked
     sendMessage({ text: prompt });
   };
 
+  const handleRerunAgent = async () => {
+    // Get the first user message (the original prompt)
+    const firstUserMessage = messages.find((msg) => msg.role === 'user');
+
+    if (!firstUserMessage) {
+      return;
+    }
+
+    // Extract text content from the message
+    let messageText = '';
+
+    // Check for parts property (AI SDK format)
+    if ((firstUserMessage as any).parts) {
+      const textPart = (firstUserMessage as any).parts.find((part: any) => part.type === 'text');
+      if (textPart?.text) {
+        messageText = textPart.text;
+      }
+    } else if (typeof firstUserMessage.content === 'string') {
+      messageText = firstUserMessage.content;
+    } else if (Array.isArray(firstUserMessage.content)) {
+      // Handle array of content parts
+      const textPart = firstUserMessage.content.find((part: any) => part.type === 'text');
+      if (textPart?.text) {
+        messageText = textPart.text;
+      }
+    }
+
+    if (!messageText) {
+      return;
+    }
+
+    // Clear all messages to start fresh
+    setMessages([]);
+
+    // Reset memory loading flag to load memories again
+    setHasLoadedMemories(false);
+
+    // Load memories if needed
+    await loadMemoriesIfNeeded();
+
+    // Re-run with the first user message
+    setIsSubmitting(true);
+    setSubmissionStartTime(Date.now());
+    sendMessage({ text: messageText });
+    if (currentChat) {
+      setPendingPrompts(currentChatSessionId, messageText);
+    }
+  };
+
+  const isSubmittingDisabled = !currentInput.trim() || isLoading || isSubmitting || !!pendingPrompt;
+
   if (!currentChat) {
     // TODO: this is a temporary solution, maybe let's make some cool loading animations with a mascot?
     return null;
   }
 
-  // Check if the chat is empty (no messages)
   const isChatEmpty = messages.length === 0;
+
+  // Early return if no current chat exists (e.g., during deletion)
+  if (!currentChat) {
+    return (
+      <div className="flex flex-col h-full gap-2 max-w-full overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-auto">
+          <EmptyChatState onPromptSelect={handlePromptSelect} />
+        </div>
+        <ChatInput
+          input=""
+          disabled={true}
+          isLoading={false}
+          handleInputChange={() => {}}
+          handleSubmit={() => {}}
+          stop={() => {}}
+          hasMessages={false}
+        />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full gap-2 max-w-full overflow-hidden">
-      {isChatEmpty ? (
+      {isChatEmpty && !pendingPrompt ? (
         <div className="flex-1 min-h-0 overflow-auto">
           <EmptyChatState onPromptSelect={handlePromptSelect} />
         </div>
       ) : (
         <div className="flex-1 min-h-0 overflow-hidden max-w-full">
           <ChatHistory
+            chatId={currentChat.id}
+            pendingPrompt={pendingPrompt}
+            sessionId={currentChatSessionId}
             messages={regeneratingIndex !== null && fullMessagesBackup.length > 0 ? fullMessagesBackup : messages}
             editingMessageId={editingMessageId}
             editingContent={editingContent}
@@ -263,14 +424,18 @@ function ChatPage() {
       )}
 
       <SystemPrompt />
+
       <div className="flex-shrink-0">
         <ChatInput
           input={currentInput}
           handleInputChange={handleInputChange}
           handleSubmit={handleSubmit}
           isLoading={isLoading}
-          isSubmitting={isSubmitting}
+          disabled={isSubmittingDisabled}
           stop={stop}
+          onTooManyTools={setHasTooManyTools}
+          hasMessages={messages.length > 0}
+          onRerunAgent={handleRerunAgent}
         />
       </div>
     </div>
