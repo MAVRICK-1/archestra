@@ -356,6 +356,10 @@ export default class PodmanContainer {
           dispatcher: new Agent({
             connect: { socketPath: this.socketPath },
           }),
+          // Add timeout and connection settings to prevent hanging
+          headersTimeout: 30000, // 30 seconds
+          bodyTimeout: 300000,   // 5 minutes for body timeout
+          keepAliveTimeout: 30000,
         }
       );
 
@@ -410,7 +414,12 @@ export default class PodmanContainer {
       });
 
       body.on('error', (err: Error) => {
-        log.error(`Error streaming logs for ${this.containerName}:`, err);
+        // Handle timeout errors more gracefully
+        if (err.name === 'BodyTimeoutError' || err.message.includes('timeout')) {
+          log.warn(`Log streaming timeout for ${this.containerName}, will attempt to reconnect later`);
+        } else {
+          log.error(`Error streaming logs for ${this.containerName}:`, err);
+        }
         this.stopStreamingLogs();
       });
 
@@ -712,15 +721,11 @@ export default class PodmanContainer {
          */
         remove: false,
         /**
-         * On Linux, use keep-id mode for user namespace to run with single UID mapping
-         * This allows containers to run without proper newuidmap/newgidmap binaries
-         *
-         * https://docs.podman.io/en/v4.4/markdown/options/userns.container.html
+         * On Linux, run as root user inside the container to avoid UID/GID mapping issues
+         * The container is still isolated and rootless from the host perspective
          */
         ...(process.platform === 'linux' && {
-          userns: {
-            nsmode: 'keep-id',
-          },
+          user: '0:0',
         }),
       };
 

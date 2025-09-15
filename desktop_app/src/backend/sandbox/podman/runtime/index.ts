@@ -431,10 +431,68 @@ export default class PodmanRuntime {
   }
 
   /**
+   * Run podman system migrate to handle storage inconsistencies
+   * This is necessary when switching between different user namespace configurations
+   */
+  private async runPodmanSystemMigrate(): Promise<void> {
+    if (!IS_LINUX) return;
+
+    return new Promise((resolve) => {
+      log.info('Running podman system migrate to handle storage inconsistencies...');
+
+      const migrateProcess = spawn(
+        this.podmanBinaryPath,
+        this.addLinuxSpecificFlags(['system', 'migrate']),
+        {
+          env: {
+            ...process.env,
+            CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
+            PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
+            CONTAINERS_CONF: path.join(this.helperBinariesDirectory, 'etc', 'containers', 'containers.conf'),
+            REGISTRY_AUTH_FILE: this.registryAuthFilePath,
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        }
+      );
+
+      let stderr = '';
+
+      migrateProcess.stdout?.on('data', (data) => {
+        log.info(`[Podman migrate stdout]: ${data}`);
+      });
+
+      migrateProcess.stderr?.on('data', (data) => {
+        stderr += data.toString();
+        log.info(`[Podman migrate stderr]: ${data}`);
+      });
+
+      migrateProcess.on('exit', (code) => {
+        if (code === 0) {
+          log.info('Podman system migrate completed successfully');
+        } else {
+          log.warn(`Podman system migrate exited with code ${code}: ${stderr}`);
+        }
+        // Always resolve - migration failure shouldn't prevent startup
+        resolve();
+      });
+
+      migrateProcess.on('error', (error) => {
+        log.warn(`Podman system migrate error: ${error.message}`);
+        // Always resolve - migration failure shouldn't prevent startup
+        resolve();
+      });
+    });
+  }
+
+  /**
    * Starts the Podman system service on Linux using the bundled static binary.
    * This creates a self-contained Podman API service without external dependencies.
    */
   private async startPodmanSystemService() {
+    // First, run podman system migrate to handle any storage inconsistencies
+    // This is needed when switching between different user namespace configurations
+    await this.runPodmanSystemMigrate();
+
     // Ensure the socket directory exists
     const socketDir = path.dirname(this.LINUX_SOCKET_PATH);
     if (!fs.existsSync(socketDir)) {
