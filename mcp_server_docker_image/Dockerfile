@@ -105,7 +105,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
 # Use tini for proper signal handling
 ENTRYPOINT ["/sbin/tini", "--"]
 
-# Default command (override when running specific MCP servers)
+# Default command (override when running specific MCP server)
 CMD ["sh", "-c", "echo 'MCP base container ready. Override CMD to run your MCP server.'"]
 
 # Labels for container metadata
