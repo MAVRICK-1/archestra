@@ -9,7 +9,7 @@ import EmptyChatState from '@ui/components/Chat/EmptyChatState';
 import SystemPrompt from '@ui/components/Chat/SystemPrompt';
 import config from '@ui/config';
 import { getAllMemories } from '@ui/lib/clients/archestra/api/gen';
-import { useChatStore, useCloudProvidersStore, useOllamaStore, useToolsStore } from '@ui/stores';
+import { useChatStore, useCloudProvidersStore, useDeveloperModeStore, useOllamaStore, useToolsStore } from '@ui/stores';
 import { useStatusBarStore } from '@ui/stores/status-bar-store';
 
 import { DEFAULT_ARCHESTRA_TOOLS } from '../../constants';
@@ -38,6 +38,7 @@ function ChatPage() {
   const { selectedModel } = useOllamaStore();
   const { availableCloudProviderModels } = useCloudProvidersStore();
   const { setChatInference } = useStatusBarStore();
+  const { systemPrompt } = useDeveloperModeStore();
   const [hasLoadedMemories, setHasLoadedMemories] = useState(false);
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
 
@@ -67,6 +68,9 @@ function ChatPage() {
   const selectedToolIdsRef = useRef(selectedToolIds);
   selectedToolIdsRef.current = selectedToolIds;
 
+  const systemPromptRef = useRef(systemPrompt);
+  systemPromptRef.current = systemPrompt;
+
   const transport = useMemo(() => {
     const apiEndpoint = `${config.archestra.chatStreamBaseUrl}/stream`;
 
@@ -76,14 +80,27 @@ function ChatPage() {
         const currentModel = selectedModelRef.current;
         const currentCloudProviderModels = availableCloudProviderModelsRef.current;
         const currentSelectedToolIds = selectedToolIdsRef.current;
+        const currentSystemPrompt = systemPromptRef.current;
         const currentChat = getCurrentChat();
 
         const cloudModel = currentCloudProviderModels.find((m) => m.id === currentModel);
         const provider = cloudModel ? cloudModel.provider : 'ollama';
 
+        // Prepend system prompt as a system message if it exists
+        const messagesWithSystemPrompt = currentSystemPrompt
+          ? [
+              {
+                id: 'system-prompt',
+                role: 'system',
+                parts: [{ type: 'text', text: currentSystemPrompt }],
+              },
+              ...messages,
+            ]
+          : messages;
+
         return {
           body: {
-            messages,
+            messages: messagesWithSystemPrompt,
             model: currentModel || 'llama3.1:8b',
             sessionId: id || currentChatSessionId,
             provider: provider,
