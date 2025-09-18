@@ -171,10 +171,6 @@
     ]
   },
   "lint-staged": {
-    "**/*": [
-      "prettier --write --ignore-unknown",
-      "pnpm test",
-      "pnpm codegen:all"
-    ]
+    "**/*": "prettier --write --ignore-unknown"
   }
 }

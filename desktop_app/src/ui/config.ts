@@ -1,4 +1,5 @@
 const IS_DEV = import.meta.env.DEV;
+// Test comment for pre-commit hook verification
 
 const HOST = import.meta.env.VITE_HOST || 'localhost';
 

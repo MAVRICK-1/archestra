@@ -1,1 +1,13 @@
-cd desktop_app && pnpm lint-staged
+#!/bin/sh
+cd desktop_app
+
+# Run lint-staged
+pnpm lint-staged
+
+# Run tests
+echo "Running tests..."
+pnpm test
+
+# Run codegen
+echo "Running codegen..."
+pnpm codegen:all
