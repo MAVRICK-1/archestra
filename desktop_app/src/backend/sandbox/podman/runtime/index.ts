@@ -179,6 +179,12 @@ export default class PodmanRuntime {
         CONTAINERS_HELPER_BINARY_DIR: this.helperBinariesDirectory,
 
         /**
+         * Add our helper binaries directory to PATH so virtiofsd can be found.
+         * This is needed for Podman machine to work properly on Linux.
+         */
+        PATH: `${this.helperBinariesDirectory}:${process.env.PATH}`,
+
+        /**
          * Basically we don't want the podman machine to use the user's docker config (if one exists)
          *
          * From the podman docs (https://docs.podman.io/en/v5.2.2/markdown/podman-create.1.html#authfile-path):
@@ -342,6 +348,8 @@ export default class PodmanRuntime {
     this.machineStartupMessage = 'Initializing podman machine...';
     this.machineStartupError = null;
 
+    let stderrOutput = '';
+
     this.runCommand({
       command: ['machine', 'init', '--now', this.ARCHESTRA_MACHINE_NAME],
       pipes: {
@@ -354,12 +362,18 @@ export default class PodmanRuntime {
             this.machineStartupMessage = message;
           },
         },
+        onStderr: (data) => {
+          stderrOutput += data;
+          log.error(`[Podman machine init stderr]: ${data}`);
+        },
         onExit: (code, signal) => {
           if (code === 0) {
             // Call the success callback - socket setup will happen there first
             this.onMachineInstallationSuccess();
           } else {
-            this.handleMachineError(new Error(`Podman machine init failed with code ${code} and signal ${signal}`));
+            const errorMessage = `Podman machine init failed with code ${code} and signal ${signal}`;
+            const fullError = stderrOutput ? `${errorMessage}. Error: ${stderrOutput}` : errorMessage;
+            this.handleMachineError(new Error(fullError));
           }
         },
         onError: this.handleMachineError.bind(this),
@@ -379,6 +393,8 @@ export default class PodmanRuntime {
    * or output to stderr, so we're not going to do anything with it for now
    */
   ensureArchestraMachineIsRunning() {
+    let stderrOutput = '';
+
     this.runCommand<PodmanMachineListOutput>({
       command: ['machine', 'ls', '--format', 'json'],
       pipes: {
@@ -414,6 +430,17 @@ export default class PodmanRuntime {
               this.startArchestraMachine();
             }
           },
+        },
+        onStderr: (data) => {
+          stderrOutput += data;
+          log.error(`[Podman machine ls stderr]: ${data}`);
+        },
+        onExit: (code, signal) => {
+          if (code !== 0) {
+            const errorMessage = `Podman machine ls failed with code ${code} and signal ${signal}`;
+            const fullError = stderrOutput ? `${errorMessage}. Error: ${stderrOutput}` : errorMessage;
+            this.handleMachineError(new Error(fullError));
+          }
         },
         onError: this.handleMachineError.bind(this),
       },

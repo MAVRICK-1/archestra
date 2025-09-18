@@ -237,16 +237,22 @@ async function startBackendServer(): Promise<void> {
     // Start Ollama server first
     await OllamaServer.startServer();
 
-    /**
-     * Ensure that ollama models that're required for various app functionality are available,
-     * downloading them if necessary. This must be done BEFORE starting MCP servers
-     * so that tool analysis can proceed without waiting forever.
-     */
-    await OllamaClient.ensureModelsAvailable();
-
     // Now start the sandbox manager which will connect MCP clients
-    McpServerSandboxManager.onSandboxStartupSuccess = () => {
+    McpServerSandboxManager.onSandboxStartupSuccess = async () => {
       log.info('Sandbox startup successful');
+
+      /**
+       * Ensure that ollama models that're required for various app functionality are available,
+       * downloading them if necessary. This is done AFTER Podman is ready
+       * so that tool analysis can proceed without waiting forever.
+       */
+      try {
+        await OllamaClient.ensureModelsAvailable();
+        log.info('Ollama models are ready');
+      } catch (error) {
+        log.error('Failed to ensure Ollama models are available:', error);
+        // Continue anyway - the app can work without model analysis
+      }
     };
     McpServerSandboxManager.onSandboxStartupError = (error) => {
       log.error('Sandbox startup error:', error);
