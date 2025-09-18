@@ -1,4 +1,6 @@
 #!/bin/sh
+set -e  # Exit immediately if any command fails
+
 cd desktop_app
 
 # Run lint-staged
