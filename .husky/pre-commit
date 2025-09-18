@@ -1,9 +1,7 @@
 #!/bin/sh
 set -e  # Exit immediately if any command fails
 
-cd desktop_app
-
-# Run lint-staged
+# Run lint-staged (handles desktop_app path internally)
 pnpm lint-staged
 
 # Run tests

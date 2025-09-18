@@ -1,0 +1,29 @@
+{
+  "name": "archestra-root",
+  "version": "0.0.7",
+  "description": "Root level commands for Archestra development",
+  "private": true,
+  "scripts": {
+    "install": "cd desktop_app && pnpm install",
+    "prepare": "husky",
+    "test": "cd desktop_app && pnpm test",
+    "start": "cd desktop_app && pnpm start",
+    "start:server": "cd desktop_app && pnpm start:server",
+    "package": "cd desktop_app && pnpm package",
+    "make": "cd desktop_app && pnpm make",
+    "typecheck": "cd desktop_app && pnpm typecheck",
+    "prettier": "cd desktop_app && pnpm prettier",
+    "codegen:all": "cd desktop_app && pnpm codegen:all",
+    "codegen:libpod": "cd desktop_app && pnpm codegen:libpod",
+    "codegen:archestra:api": "cd desktop_app && pnpm codegen:archestra:api",
+    "codegen:archestra:catalog": "cd desktop_app && pnpm codegen:archestra:catalog",
+    "rebuild": "cd desktop_app && ELECTRON_RUN_AS_NODE=1 pnpm exec electron ./node_modules/@electron/rebuild/lib/cli.js"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^16.1.6"
+  },
+  "lint-staged": {
+    "desktop_app/**/*": "cd desktop_app && prettier --write --ignore-unknown"
+  }
+}
