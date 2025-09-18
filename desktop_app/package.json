@@ -24,7 +24,7 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
-    "prepare": "husky install",
+    "prepare": "husky",
     "typecheck": "tsc --noEmit",
     "test": "ELECTRON_RUN_AS_NODE=1 pnpm exec electron ./node_modules/vitest/dist/cli.js --config vite.main.config.ts",
     "test:e2e:packaged": "wdio run ./wdio.conf.ts",
@@ -171,6 +171,10 @@
     ]
   },
   "lint-staged": {
-    "**/*": "prettier --write --ignore-unknown"
+    "**/*": [
+      "prettier --write --ignore-unknown",
+      "pnpm test",
+      "pnpm codegen:all"
+    ]
   }
 }

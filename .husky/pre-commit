@@ -1,0 +1,1 @@
+cd desktop_app && pnpm lint-staged
